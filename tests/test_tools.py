@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-PLUGIN_DIR = Path(__file__).resolve().parents[1] / "cybermail"
+PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_DIR))
 
 from dify_plugin.entities.tool import ToolInvokeMessage, ToolRuntime  # noqa: E402

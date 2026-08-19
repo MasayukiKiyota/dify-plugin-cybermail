@@ -55,20 +55,6 @@ Provider 設定で次のいずれかの方式を選びます。どちらの場�
     → 添付ファイル取得 (mail_id)    → ドキュメント抽出ノード
 ```
 
-## ローカル開発
-
-```bash
-cp .env.example .env      # REMOTE_INSTALL_URL / REMOTE_INSTALL_KEY を設定
-pip install -r requirements.txt
-python -m main
-```
-
-パッケージ化:
-
-```bash
-dify plugin package ./cybermail
-```
-
 ## 対応 API と未対応 API
 
 対応: `Core.Login` / `Core.SessionCheck` / `Core.KeyCheck` / `Mail.MailListGet` / `Mail.SystemMailListGet` / `Mail.SystemMailBoxListGet` / `Mail.MailAdvanceGet` / `Mail.AttachmentGet`
