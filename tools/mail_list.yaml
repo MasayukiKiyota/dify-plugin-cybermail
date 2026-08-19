@@ -1,0 +1,205 @@
+identity:
+  name: mail_list
+  author: masayukikiyota
+  label:
+    en_US: List mails
+    ja_JP: メール一覧取得
+description:
+  human:
+    en_US: List mails in a CYBERMAILΣ folder with subject, sender, date and flags.
+    ja_JP: CYBERMAILΣ の指定フォルダーのメール一覧（件名・送信者・日時・フラグ）を取得します。
+  llm: >-
+    Get a list of mails from a CYBERMAILΣ folder. Returns mail_id, subject, sender, date and
+    flags (unread / important / has_attachment) for each mail. Use the returned mail_id with
+    the "Get mail" tool to read the body. Folder IDs are "@" (Inbox), "@.sent" (Sent),
+    "@.draft" (Drafts) and "@.trash" (Trash).
+parameters:
+  - name: folder_id
+    type: string
+    required: false
+    default: "@"
+    label:
+      en_US: Folder ID
+      ja_JP: フォルダーID
+    human_description:
+      en_US: '"@" = Inbox, "@.sent" = Sent, "@.draft" = Drafts, "@.trash" = Trash. Sub folders look like "@.01".'
+      ja_JP: '「@」＝受信BOX、「@.sent」＝送信BOX、「@.draft」＝下書き、「@.trash」＝ゴミ箱。サブフォルダーは「@.01」のような形式です。'
+    llm_description: >-
+      The folder to list. "@" for Inbox (default), "@.sent" for Sent, "@.draft" for Drafts,
+      "@.trash" for Trash.
+    form: llm
+  - name: max_entry
+    type: number
+    required: false
+    default: 20
+    min: 1
+    max: 200
+    label:
+      en_US: Max entries
+      ja_JP: 最大取得件数
+    human_description:
+      en_US: Maximum number of mails to fetch. Keep this small; the folder may contain thousands of mails.
+      ja_JP: 取得する最大件数です。フォルダーには数千通ある場合があるため小さめに設定してください。
+    llm_description: Maximum number of mails to return. Default 20.
+    form: llm
+  - name: bgn_idx
+    type: number
+    required: false
+    min: 1
+    label:
+      en_US: Start index
+      ja_JP: 取得開始インデックス
+    human_description:
+      en_US: 1-based index to start from. Use it together with max entries for paging.
+      ja_JP: 1 始まりの取得開始位置です。最大取得件数と組み合わせてページングに使います。
+    llm_description: 1-based start index for paging. Omit for the first page.
+    form: llm
+  - name: sort_by
+    type: select
+    required: false
+    default: date
+    options:
+      - value: date
+        label:
+          en_US: Date (newest first)
+          ja_JP: 日時（新しい順）
+      - value: rdate
+        label:
+          en_US: Date (oldest first)
+          ja_JP: 日時（古い順）
+      - value: subject
+        label:
+          en_US: Subject (descending)
+          ja_JP: 件名（降順）
+      - value: rsubject
+        label:
+          en_US: Subject (ascending)
+          ja_JP: 件名（昇順）
+      - value: sender
+        label:
+          en_US: Sender (descending)
+          ja_JP: 送信者（降順）
+      - value: rsender
+        label:
+          en_US: Sender (ascending)
+          ja_JP: 送信者（昇順）
+      - value: size
+        label:
+          en_US: Size (descending)
+          ja_JP: サイズ（降順）
+      - value: rsize
+        label:
+          en_US: Size (ascending)
+          ja_JP: サイズ（昇順）
+    label:
+      en_US: Sort by
+      ja_JP: 並び順
+    human_description:
+      en_US: Sort order of the returned list.
+      ja_JP: 取得するメール一覧の並び順です。
+    llm_description: Sort order. Use "date" for newest first.
+    form: llm
+  - name: unread_only
+    type: boolean
+    required: false
+    default: false
+    label:
+      en_US: Unread only
+      ja_JP: 未読のみ
+    human_description:
+      en_US: Return only unread mails.
+      ja_JP: 未読のメールだけを取得します。
+    llm_description: Set true to return only unread mails.
+    form: llm
+  - name: flag_filter
+    type: string
+    required: false
+    label:
+      en_US: Flag filter (advanced)
+      ja_JP: フラグフィルタ（上級者向け）
+    human_description:
+      en_US: >-
+        Raw flag bitmask, e.g. 0x00000001 attachment, 0x00000010 important, 0x00000100 unread,
+        0x00000200 ToDo, 0x00000400 replied, 0x00400000 flagged, 0x02000000 forwarded.
+        Multiple bits are combined with OR. Takes precedence over "Unread only".
+      ja_JP: >-
+        フラグのビットマスクを直接指定します。0x00000001 添付、0x00000010 重要、0x00000100 未読、
+        0x00000200 ToDo、0x00000400 返信済、0x00400000 フラグ、0x02000000 転送済。
+        複数ビットは OR 条件です。指定時は「未読のみ」より優先されます。
+    llm_description: >-
+      Advanced raw flag bitmask such as 0x00000100 (unread). Leave empty unless a specific
+      combination is needed.
+    form: form
+  - name: label_filter
+    type: select
+    required: false
+    options:
+      - value: "0"
+        label:
+          en_US: No label
+          ja_JP: なし
+      - value: "1"
+        label:
+          en_US: Brown
+          ja_JP: 茶色
+      - value: "2"
+        label:
+          en_US: Green
+          ja_JP: 緑色
+      - value: "3"
+        label:
+          en_US: Red
+          ja_JP: 赤色
+      - value: "4"
+        label:
+          en_US: Yellow
+          ja_JP: 黄色
+      - value: "5"
+        label:
+          en_US: Blue
+          ja_JP: 青色
+    label:
+      en_US: Label filter
+      ja_JP: ラベルフィルタ
+    human_description:
+      en_US: Return only mails tagged with this label colour. Combined with the flag filter using AND.
+      ja_JP: 指定したラベル色のメールだけを取得します。フラグフィルタとは AND 条件になります。
+    llm_description: Filter by label colour (0 none, 1 brown, 2 green, 3 red, 4 yellow, 5 blue).
+    form: llm
+output_schema:
+  type: object
+  properties:
+    folder_id:
+      type: string
+    count:
+      type: number
+    mails:
+      type: array
+      items:
+        type: object
+        properties:
+          mail_id:
+            type: string
+          subject:
+            type: string
+          sender_name:
+            type: string
+          sender_email:
+            type: string
+          date:
+            type: string
+          timestamp:
+            type: number
+          size_kb:
+            type: number
+          label:
+            type: string
+          unread:
+            type: boolean
+          important:
+            type: boolean
+          has_attachment:
+            type: boolean
+extra:
+  python:
+    source: tools/mail_list.py

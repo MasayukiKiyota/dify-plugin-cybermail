@@ -1,0 +1,117 @@
+identity:
+  name: mail_get
+  author: masayukikiyota
+  label:
+    en_US: Get mail
+    ja_JP: メール本文取得
+description:
+  human:
+    en_US: Get the headers, body and attachment list of a single mail in CYBERMAILΣ.
+    ja_JP: CYBERMAILΣ の指定メールのヘッダー・本文・添付ファイル一覧を取得します。
+  llm: >-
+    Get the full content of one mail from CYBERMAILΣ, including subject, from, to, cc, date,
+    the body text (and optionally HTML) and the list of attachments with their hash values.
+    Requires a mail_id obtained from the "List mails" tool. Pass an attachment hash to the
+    "Get attachment" tool to download a file.
+parameters:
+  - name: mail_id
+    type: string
+    required: true
+    label:
+      en_US: Mail ID
+      ja_JP: メールID
+    human_description:
+      en_US: The mail ID returned by the "List mails" tool.
+      ja_JP: 「メール一覧取得」で返された mail_id を指定します。
+    llm_description: The mail_id of the mail to read, as returned by the list tool.
+    form: llm
+  - name: folder_id
+    type: string
+    required: false
+    default: "@"
+    label:
+      en_US: Folder ID
+      ja_JP: フォルダーID
+    human_description:
+      en_US: '"@" = Inbox, "@.sent" = Sent, "@.draft" = Drafts, "@.trash" = Trash. Must match the folder the mail belongs to.'
+      ja_JP: '「@」＝受信BOX、「@.sent」＝送信BOX、「@.draft」＝下書き、「@.trash」＝ゴミ箱。メールが存在するフォルダーを指定してください。'
+    llm_description: The folder the mail belongs to. Defaults to "@" (Inbox).
+    form: llm
+  - name: body_format
+    type: select
+    required: false
+    default: text
+    options:
+      - value: text
+        label:
+          en_US: Plain text only
+          ja_JP: テキストのみ
+      - value: html
+        label:
+          en_US: HTML only
+          ja_JP: HTMLのみ
+      - value: both
+        label:
+          en_US: Both text and HTML
+          ja_JP: テキストとHTMLの両方
+    label:
+      en_US: Body format
+      ja_JP: 本文の形式
+    human_description:
+      en_US: HTML bodies can be very large, so plain text is returned by default.
+      ja_JP: HTML本文は非常に大きくなる場合があるため、既定ではテキストのみを返します。
+    llm_description: Which body representation to return. Use "text" unless HTML markup is needed.
+    form: llm
+output_schema:
+  type: object
+  properties:
+    mail_id:
+      type: string
+    folder_id:
+      type: string
+    subject:
+      type: string
+    from:
+      type: string
+    to:
+      type: array
+      items:
+        type: string
+    cc:
+      type: array
+      items:
+        type: string
+    bcc:
+      type: array
+      items:
+        type: string
+    reply_to:
+      type: string
+    date:
+      type: string
+    timestamp:
+      type: number
+    body_text:
+      type: string
+    body_html:
+      type: string
+    attachments:
+      type: array
+      items:
+        type: object
+        properties:
+          filename:
+            type: string
+          hash:
+            type: string
+          size:
+            type: number
+          content_type:
+            type: string
+    attachment_count:
+      type: number
+    inline_attachment_count:
+      type: number
+extra:
+  python:
+    source: tools/mail_get.py

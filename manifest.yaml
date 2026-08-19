@@ -1,0 +1,35 @@
+version: 0.0.1
+type: plugin
+author: masayukikiyota
+name: cybermail
+label:
+  en_US: CyberMail
+  ja_JP: サイバーメール
+description:
+  en_US: Read mails, mail bodies and attachments from CYBERMAILΣ via its Web API.
+  ja_JP: CYBERMAILΣ の Web API 経由でメール一覧・本文・添付ファイルを取得します。
+icon: icon.svg
+tags:
+  - productivity
+resource:
+  memory: 1048576
+  permission:
+    tool:
+      enabled: true
+    storage:
+      enabled: true
+      size: 1048576
+plugins:
+  tools:
+    - provider/cybermail.yaml
+meta:
+  version: 0.0.1
+  arch:
+    - amd64
+    - arm64
+  runner:
+    language: python
+    version: "3.12"
+    entrypoint: main
+created_at: 2026-08-05T00:00:00+09:00
+privacy: PRIVACY.md

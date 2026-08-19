@@ -1,0 +1,97 @@
+identity:
+  name: attachment_get
+  author: masayukikiyota
+  label:
+    en_US: Get attachments
+    ja_JP: 添付ファイル取得
+description:
+  human:
+    en_US: Download the attachments of a CYBERMAILΣ mail as individual files.
+    ja_JP: CYBERMAILΣ のメールに添付されたファイルを個別のファイルとして取得します。
+  llm: >-
+    Download attachments of a mail from CYBERMAILΣ. Each attachment is returned as a separate
+    file that can be passed to downstream document extraction nodes. Give only the mail_id to
+    download every attachment, or give a specific attachment hash (from the "Get mail" tool)
+    to download a single file.
+parameters:
+  - name: mail_id
+    type: string
+    required: true
+    label:
+      en_US: Mail ID
+      ja_JP: メールID
+    human_description:
+      en_US: The mail ID returned by the "List mails" tool.
+      ja_JP: 「メール一覧取得」で返された mail_id を指定します。
+    llm_description: The mail_id whose attachments should be downloaded.
+    form: llm
+  - name: folder_id
+    type: string
+    required: false
+    default: "@"
+    label:
+      en_US: Folder ID
+      ja_JP: フォルダーID
+    human_description:
+      en_US: '"@" = Inbox, "@.sent" = Sent, "@.draft" = Drafts, "@.trash" = Trash. Must match the folder the mail belongs to.'
+      ja_JP: '「@」＝受信BOX、「@.sent」＝送信BOX、「@.draft」＝下書き、「@.trash」＝ゴミ箱。メールが存在するフォルダーを指定してください。'
+    llm_description: The folder the mail belongs to. Defaults to "@" (Inbox).
+    form: llm
+  - name: hash
+    type: string
+    required: false
+    label:
+      en_US: Attachment hash
+      ja_JP: 添付ファイルの hash
+    human_description:
+      en_US: Download only this attachment. Leave empty to download every attachment of the mail.
+      ja_JP: 特定の添付ファイルだけを取得する場合に指定します。空欄なら全ての添付を取得します。
+    llm_description: >-
+      The hash value of a single attachment, as returned in attachments[].hash by the
+      "Get mail" tool. Leave empty to download all attachments.
+    form: llm
+  - name: include_inline
+    type: boolean
+    required: false
+    default: false
+    label:
+      en_US: Include inline attachments
+      ja_JP: インライン添付を含める
+    human_description:
+      en_US: Also download images embedded in the HTML body. Off by default.
+      ja_JP: HTML本文に埋め込まれた画像なども取得します。既定ではオフです。
+    llm_description: Set true to also download inline (embedded) attachments such as HTML body images.
+    form: llm
+output_schema:
+  type: object
+  properties:
+    mail_id:
+      type: string
+    folder_id:
+      type: string
+    downloaded_count:
+      type: number
+    failed_count:
+      type: number
+    files:
+      type: array
+      items:
+        type: object
+        properties:
+          filename:
+            type: string
+          hash:
+            type: string
+          size:
+            type: number
+          mime_type:
+            type: string
+          inline:
+            type: boolean
+          success:
+            type: boolean
+          error:
+            type: string
+extra:
+  python:
+    source: tools/attachment_get.py

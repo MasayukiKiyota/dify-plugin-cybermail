@@ -1,0 +1,85 @@
+identity:
+  author: masayukikiyota
+  name: cybermail
+  label:
+    en_US: CyberMail
+    ja_JP: サイバーメール
+  description:
+    en_US: Read mails, mail bodies and attachments from CYBERMAILΣ via its Web API.
+    ja_JP: CYBERMAILΣ の Web API 経由でメール一覧・本文・添付ファイルを取得します。
+  icon: icon.svg
+  tags:
+    - productivity
+credentials_for_provider:
+  base_url:
+    type: text-input
+    required: true
+    label:
+      en_US: Base URL
+      ja_JP: Base URL
+    placeholder:
+      en_US: https://example.cybermail.jp
+      ja_JP: https://example.cybermail.jp
+    help:
+      en_US: The CYBERMAILΣ host. "/cgi-bin/cgi_api" is appended automatically.
+      ja_JP: CYBERMAILΣ のホストを指定します。「/cgi-bin/cgi_api」は自動で付与されます。
+  auth_method:
+    type: select
+    required: true
+    default: password
+    options:
+      - value: password
+        label:
+          en_US: User ID and password (Core.Login)
+          ja_JP: ユーザID/パスワード（Core.Login）
+      - value: api_key
+        label:
+          en_US: API_KEY
+          ja_JP: API_KEY
+    label:
+      en_US: Authentication method
+      ja_JP: 認証方式
+    help:
+      en_US: >-
+        "User ID and password" logs in with Core.Login and caches the API_SESSION.
+        "API_KEY" uses a system-wide key together with the user ID below.
+      ja_JP: >-
+        「ユーザID/パスワード」は Core.Login でログインし API_SESSION をキャッシュします。
+        「API_KEY」はシステム発行のキーと下記ユーザIDを組み合わせて使用します。
+  user_id:
+    type: text-input
+    required: true
+    label:
+      en_US: User ID
+      ja_JP: ユーザID
+    placeholder:
+      en_US: user@example.co.jp
+      ja_JP: user@example.co.jp
+    help:
+      en_US: The mailbox to operate on. Required for both authentication methods.
+      ja_JP: 操作対象のメールボックスです。どちらの認証方式でも必須です。
+  password:
+    type: secret-input
+    required: false
+    label:
+      en_US: Password
+      ja_JP: パスワード
+    help:
+      en_US: Required when the authentication method is "User ID and password".
+      ja_JP: 認証方式が「ユーザID/パスワード」のときに必須です。
+  api_key:
+    type: secret-input
+    required: false
+    label:
+      en_US: API_KEY
+      ja_JP: API_KEY
+    help:
+      en_US: Required when the authentication method is "API_KEY".
+      ja_JP: 認証方式が「API_KEY」のときに必須です。
+tools:
+  - tools/mail_list.yaml
+  - tools/mail_get.yaml
+  - tools/attachment_get.yaml
+extra:
+  python:
+    source: provider/cybermail.py
