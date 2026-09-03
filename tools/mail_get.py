@@ -6,7 +6,7 @@ from dify_plugin.entities.tool import ToolInvokeMessage
 
 from utils.client import CybermailError
 from utils.mail import normalize_mail
-from utils.plugin import create_client, get_str
+from utils.plugin import create_client, emit_result, get_str
 
 VALID_BODY_FORMATS = {"text", "html", "both"}
 
@@ -44,7 +44,7 @@ class MailGetTool(Tool):
         elif body_format == "html":
             mail["body_text"] = ""
 
-        yield self.create_json_message(mail)
+        yield from emit_result(self, mail)
         yield self.create_text_message(self._render(mail, body_format))
 
     @staticmethod

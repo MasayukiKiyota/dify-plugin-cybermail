@@ -91,6 +91,27 @@ def messages_by_type(messages, message_type):
     return [m for m in messages if m.type == message_type]
 
 
+def variables_of(messages):
+    """VARIABLE メッセージを {変数名: 値} に畳む。"""
+    return {
+        m.message.variable_name: m.message.variable_value
+        for m in messages_by_type(messages, ToolInvokeMessage.MessageType.VARIABLE)
+    }
+
+
+def json_of(messages, index=0):
+    return messages_by_type(messages, ToolInvokeMessage.MessageType.JSON)[index].message.json_object
+
+
+def assert_variables_match_json(case, messages):
+    """output_schema 由来の出力変数が JSON と同じ内容で埋まっていること。"""
+    result = json_of(messages)
+    variables = variables_of(messages)
+    case.assertEqual(variables, {k: v for k, v in result.items() if not k.startswith("_")})
+    # text / files / json は Dify の組み込み出力なので変数化してはいけない。
+    case.assertEqual(set(variables) & {"text", "files", "json"}, set())
+
+
 LIST_SAMPLE = [
     {
         "label": 0,
@@ -205,6 +226,15 @@ class MailListToolTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_tool(MailListTool, {"sort_by": "priority"}, [ok([])])
 
+    def test_output_variables_are_set(self):
+        messages, _ = run_tool(MailListTool, {"folder_id": "@"}, [ok(LIST_SAMPLE)])
+        assert_variables_match_json(self, messages)
+
+        variables = variables_of(messages)
+        self.assertEqual(variables["folder_id"], "@")
+        self.assertEqual(variables["count"], 2)
+        self.assertEqual(variables["mails"][0]["mail_id"], "X_TOQNEGF57F")
+
 
 class MailGetToolTest(unittest.TestCase):
     def test_text_format_strips_html(self):
@@ -244,6 +274,16 @@ class MailGetToolTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_tool(MailGetTool, {}, [ok(MAIL_SAMPLE)])
 
+    def test_output_variables_are_set(self):
+        messages, _ = run_tool(MailGetTool, {"mail_id": "O_TMENEG7K8B"}, [ok(MAIL_SAMPLE)])
+        assert_variables_match_json(self, messages)
+
+        variables = variables_of(messages)
+        self.assertEqual(variables["subject"], "テストメール")
+        self.assertEqual(variables["body_text"], "aaaaaa\n\n")
+        self.assertEqual(variables["attachment_count"], 2)
+        self.assertNotIn("_inline_attachments", variables)
+
 
 class AttachmentGetToolTest(unittest.TestCase):
     def test_downloads_all_attachments_as_separate_files(self):
@@ -269,10 +309,10 @@ class AttachmentGetToolTest(unittest.TestCase):
         result = messages_by_type(messages, ToolInvokeMessage.MessageType.JSON)[0].message.json_object
         self.assertEqual(result["downloaded_count"], 2)
         self.assertEqual(result["failed_count"], 0)
-        self.assertEqual(result["files"][0]["filename"], "test.pptx")
-        self.assertEqual(result["files"][0]["size"], len(b"PPTXDATA"))
+        self.assertEqual(result["attachments"][0]["filename"], "test.pptx")
+        self.assertEqual(result["attachments"][0]["size"], len(b"PPTXDATA"))
         # メタ情報の contentType を優先すること。
-        self.assertTrue(result["files"][0]["mime_type"].endswith("presentationml.presentation"))
+        self.assertTrue(result["attachments"][0]["mime_type"].endswith("presentationml.presentation"))
 
     def test_single_hash_downloads_only_that_file(self):
         messages, http = run_tool(
@@ -298,7 +338,7 @@ class AttachmentGetToolTest(unittest.TestCase):
         )
         self.assertEqual(len(messages_by_type(messages, ToolInvokeMessage.MessageType.BLOB)), 3)
         result = messages_by_type(messages, ToolInvokeMessage.MessageType.JSON)[0].message.json_object
-        self.assertTrue(result["files"][2]["inline"])
+        self.assertTrue(result["attachments"][2]["inline"])
 
     def test_no_attachment_reports_cleanly(self):
         messages, _ = run_tool(
@@ -329,12 +369,37 @@ class AttachmentGetToolTest(unittest.TestCase):
         result = messages_by_type(messages, ToolInvokeMessage.MessageType.JSON)[0].message.json_object
         self.assertEqual(result["downloaded_count"], 1)
         self.assertEqual(result["failed_count"], 1)
-        self.assertFalse(result["files"][0]["success"])
-        self.assertIn("attachment not found", result["files"][0]["error"])
+        self.assertFalse(result["attachments"][0]["success"])
+        self.assertIn("attachment not found", result["attachments"][0]["error"])
 
     def test_missing_mail_id_rejected(self):
         with self.assertRaises(ValueError):
             run_tool(AttachmentGetTool, {}, [ok(MAIL_SAMPLE)])
+
+    def test_output_variables_are_set_without_shadowing_files(self):
+        messages, _ = run_tool(
+            AttachmentGetTool,
+            {"mail_id": "O_TMENEG7K8B"},
+            [
+                ok(MAIL_SAMPLE),
+                FakeResponse(b"PPTXDATA", content_type="application/octet-stream"),
+                FakeResponse(b"hello", content_type="text/plain"),
+            ],
+        )
+        assert_variables_match_json(self, messages)
+
+        variables = variables_of(messages)
+        self.assertEqual(variables["downloaded_count"], 2)
+        self.assertEqual(variables["attachments"][0]["filename"], "test.pptx")
+
+    def test_output_variables_are_set_when_no_attachment(self):
+        messages, _ = run_tool(
+            AttachmentGetTool,
+            {"mail_id": "M"},
+            [ok({**MAIL_SAMPLE, "attachments": [], "inlineAttachments": []})],
+        )
+        assert_variables_match_json(self, messages)
+        self.assertEqual(variables_of(messages)["attachments"], [])
 
 
 if __name__ == "__main__":

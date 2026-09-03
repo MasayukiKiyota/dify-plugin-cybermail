@@ -5,7 +5,7 @@ from dify_plugin import Tool
 from dify_plugin.entities.tool import ToolInvokeMessage
 
 from utils.flags import FLAG_UNREAD, decode_flag, decode_label, parse_flag_filter, to_jst_iso
-from utils.plugin import create_client, get_bool, get_int, get_str
+from utils.plugin import create_client, emit_result, get_bool, get_int, get_str
 
 VALID_SORT_BY = {
     "date",
@@ -59,7 +59,7 @@ class MailListTool(Tool):
         mails = [self._normalize(entry) for entry in (data or []) if entry is not None]
         result = {"folder_id": folder_id, "count": len(mails), "mails": mails}
 
-        yield self.create_json_message(result)
+        yield from emit_result(self, result)
         yield self.create_text_message(self._summarize(folder_id, mails))
 
     @staticmethod

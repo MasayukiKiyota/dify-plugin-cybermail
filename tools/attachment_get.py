@@ -6,7 +6,7 @@ from dify_plugin.entities.tool import ToolInvokeMessage
 
 from utils.client import CybermailError
 from utils.mail import normalize_attachments
-from utils.plugin import create_client, get_bool, get_str
+from utils.plugin import create_client, emit_result, get_bool, get_str
 
 
 class AttachmentGetTool(Tool):
@@ -53,14 +53,15 @@ class AttachmentGetTool(Tool):
         if not targets:
             subject = meta.get("subject") or "(件名なし)"
             yield self.create_text_message(f"メール「{subject}」に添付ファイルはありません。")
-            yield self.create_json_message(
+            yield from emit_result(
+                self,
                 {
                     "mail_id": mail_id,
                     "folder_id": folder_id,
                     "downloaded_count": 0,
                     "failed_count": 0,
-                    "files": [],
-                }
+                    "attachments": [],
+                },
             )
             return
 
@@ -97,13 +98,16 @@ class AttachmentGetTool(Tool):
         downloaded = [item for item in results if item["success"]]
         failed = [item for item in results if not item["success"]]
 
-        yield self.create_json_message(
+        # ファイル本体は blob として Dify 組み込みの files 出力に入るため、
+        # ここでは明細を attachments という別名で返して上書きを避ける。
+        yield from emit_result(
+            self,
             {
                 "mail_id": mail_id,
                 "folder_id": folder_id,
                 "downloaded_count": len(downloaded),
                 "failed_count": len(failed),
-                "files": [
+                "attachments": [
                     {
                         "filename": item.get("filename"),
                         "hash": item.get("hash"),
@@ -115,5 +119,5 @@ class AttachmentGetTool(Tool):
                     }
                     for item in results
                 ],
-            }
+            },
         )
