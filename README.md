@@ -1,6 +1,6 @@
 # CyberMail (CYBERMAILΣ) Dify プラグイン
 
-CYBERMAILΣ の Web API 経由で、メール一覧・本文・添付ファイルを Dify のワークフロー／エージェントから取得するための Tool プラグインです。**読み取り専用**で、メールの送信・削除・移動・フラグ変更は行いません。
+CYBERMAILΣ の Web API 経由で、メール一覧・本文・添付ファイルを Dify のワークフロー／エージェントから取得し、未読／重要フラグを変更するための Tool プラグインです。書き込みは**フラグ変更のみ**で、メールの送信・削除・移動は行いません。
 
 ## 認証
 
@@ -49,6 +49,42 @@ Provider 設定で次のいずれかの方式を選びます。どちらの場�
 - 1 件の取得に失敗しても処理は止まらず、警告メッセージを出して残りを続行します
 - ファイル本体は Dify 標準の `files` 出力に入ります。ファイル名・サイズ・成否などの明細は `attachments` 出力変数から参照してください
 
+### メールフラグ変更 (`mail_flag_set`)
+
+`Mail.MailFlagModify` を使い、指定メールの未読フラグ・重要フラグを変更します。
+実機で検証済みで、**操作対象のフラグ以外は変化しません**（詳細は `requirements.md` の制約 9）。
+
+- パラメータ: `mail_id`（必須）、`action`（必須）、`folder_id`（既定 `@`）
+- `action` は次の 4 つ。API の `unset`（0＝付与 / 1＝削除）の反転は Tool 内で吸収しているため、意識する必要はありません
+
+  | action | 内容 |
+  |---|---|
+  | `mark_read` | 既読にする（未読フラグを削除） |
+  | `mark_unread` | 未読にする（未読フラグを付与） |
+  | `add_important` | 重要フラグを付ける |
+  | `remove_important` | 重要フラグを外す |
+
+- **「ユーザID/パスワード」方式でのみ利用できます。** `Mail.MailFlagModify` は API_SESSION 専用で API_KEY を受け付けないため、API_KEY 方式では実行時にエラーになります
+- 1 回の呼び出しで **1 通のみ**変更します。複数通に適用する場合は Dify のイテレーションノードで回してください
+- **通常の操作では状態の読み取りを行いません**（API 呼び出しは `Mail.MailFlagModify` の 1 回だけ）。
+  出力の `unread` / `important` にはその操作が意図した結果だけが入り（例: `mark_read` なら `unread: false`）、
+  操作していない方のフラグ・`subject`・`flag_before` / `flag_after` は `null`、`verified` は `false` になります
+- 変更後の実際の状態が必要な場合は、後続で「メール一覧取得」を呼ぶか、下の診断モードを使ってください
+
+#### 診断モード（`action` ＝「任意指定（診断用）」）
+
+未読・重要以外のフラグ（ToDo、アーカイブなど）を操作したいときや、挙動を調べたいときの逃げ道です。
+`flag` と `unset` を**加工せずそのまま** API に送り、**変更の前後に `Mail.MailInfoGet` を呼んで**状態を
+確認します（`unread` / `important` / `subject` と、生のフラグ値 `flag_before` / `flag_after`、
+16 進表記の `flag_before_hex` / `flag_after_hex` が埋まります）。生の値を返すのは、デコード対象の
+12 ビット以外（`0x04000000` など仕様書に無いビット）の変化も追えるようにするためです。
+フラグ値は仕様書の 10 進表記（`16`＝重要、`256`＝未読 など）で指定します。`0x00000010` のような
+16 進表記も受け付けられることを実機で確認しています。
+
+- `flag`（文字列）— 「16」「0x00000010」「10」など入力どおりに送信。**空欄にすると `flag` パラメータ自体を送りません**
+- `unset` — 0（付与）／1（削除）。空欄にすると `unset` パラメータ自体を送りません
+- どちらもツール設定画面でのみ指定でき、LLM からは選ばれません（`form: form`）
+
 ## 典型的なワークフロー
 
 ```
@@ -56,16 +92,17 @@ Provider 設定で次のいずれかの方式を選びます。どちらの場�
   → mails[].mail_id
     → メール本文取得 (mail_id)      → LLM で要約・分類
     → 添付ファイル取得 (mail_id)    → ドキュメント抽出ノード
+    → メールフラグ変更 (mail_id, action=mark_read)  ※処理済みのメールを既読にする
 ```
 
 ## 対応 API と未対応 API
 
-対応: `Core.Login` / `Core.SessionCheck` / `Core.KeyCheck` / `Mail.MailListGet` / `Mail.SystemMailListGet` / `Mail.SystemMailBoxListGet` / `Mail.MailAdvanceGet` / `Mail.AttachmentGet`
+対応: `Core.Login` / `Core.SessionCheck` / `Core.KeyCheck` / `Mail.MailListGet` / `Mail.SystemMailListGet` / `Mail.SystemMailBoxListGet` / `Mail.MailAdvanceGet` / `Mail.AttachmentGet` / `Mail.MailFlagModify` / `Mail.MailInfoGet`
 
 未対応（今後の拡張余地）:
 
 - メール送信 — Mail モジュールに送信 API が存在しないため（別モジュールの仕様が必要）
-- `Mail.MailFlagModify` / `Mail.MailMove` — 書き込み系のため対象外
+- `Mail.MailMove` — メールの移動・削除は誤削除リスクを避けるため対象外
 - `Mail.VirtualFolder*`（分類表示BOX）、`Mail.MailReadReceiptSend`（開封通知）、`Mail.AttachmentPack`（ZIP 一括）
 
 `utils/client.py` の `call()` / `call_binary()` は汎用のため、Tool を追加するだけで拡張できます。
