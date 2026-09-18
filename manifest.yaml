@@ -1,4 +1,4 @@
-version: 0.0.2
+version: 0.0.6
 type: plugin
 author: masayukikiyota
 name: cybermail
@@ -6,8 +6,12 @@ label:
   en_US: CyberMail
   ja_JP: サイバーメール
 description:
-  en_US: Read mails, mail bodies and attachments from CYBERMAILΣ via its Web API.
-  ja_JP: CYBERMAILΣ の Web API 経由でメール一覧・本文・添付ファイルを取得します。
+  en_US: >-
+    Read mails, mail bodies and attachments from CYBERMAILΣ via its Web API,
+    and change the read / important flags.
+  ja_JP: >-
+    CYBERMAILΣ の Web API 経由でメール一覧・本文・添付ファイルを取得し、
+    未読／重要フラグを変更します。
 icon: icon.svg
 tags:
   - productivity
@@ -23,7 +27,7 @@ plugins:
   tools:
     - provider/cybermail.yaml
 meta:
-  version: 0.0.2
+  version: 0.0.6
   arch:
     - amd64
     - arm64

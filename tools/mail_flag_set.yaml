@@ -1,0 +1,157 @@
+identity:
+  name: mail_flag_set
+  author: masayukikiyota
+  label:
+    en_US: Change mail flag
+    ja_JP: メールフラグ変更
+description:
+  human:
+    en_US: >-
+      Mark a mail in CYBERMAILΣ as read/unread, or add/remove the important flag.
+      Only the targeted flag is changed. The mail state (unread / important / subject and the
+      raw flag values) is read back only in the diagnostic mode, to keep the normal path to a
+      single API call.
+    ja_JP: >-
+      CYBERMAILΣ の指定メールを既読／未読にしたり、重要フラグを付与／削除します。
+      操作対象のフラグだけが変わります。通常の操作では API 呼び出しを 1 回に抑えるため状態の
+      読み取りは行わず、unread / important / subject と生のフラグ値（flag_before / flag_after）は
+      診断モードでのみ埋まります（未取得の項目は null）。
+  llm: >-
+    Change the read state or the important flag of one mail in CYBERMAILΣ.
+    Choose the action: "mark_read" marks the mail as read, "mark_unread" marks it back as unread,
+    "add_important" puts the important marker on it and "remove_important" takes it off.
+    Requires a mail_id obtained from the "List mails" tool, and the folder_id the mail belongs to.
+    Only one mail can be changed per call; call the tool repeatedly for several mails.
+    This tool is only available when the provider is configured with the user ID / password
+    authentication method, because the underlying API does not accept an API_KEY.
+parameters:
+  - name: mail_id
+    type: string
+    required: true
+    label:
+      en_US: Mail ID
+      ja_JP: メールID
+    human_description:
+      en_US: The mail ID returned by the "List mails" tool.
+      ja_JP: 「メール一覧取得」で返された mail_id を指定します。
+    llm_description: The mail_id of the mail to change, as returned by the list tool.
+    form: llm
+  - name: action
+    type: select
+    required: true
+    options:
+      - value: mark_read
+        label:
+          en_US: Mark as read
+          ja_JP: 既読にする
+      - value: mark_unread
+        label:
+          en_US: Mark as unread
+          ja_JP: 未読にする
+      - value: add_important
+        label:
+          en_US: Add important flag
+          ja_JP: 重要を付ける
+      - value: remove_important
+        label:
+          en_US: Remove important flag
+          ja_JP: 重要を外す
+      - value: custom
+        label:
+          en_US: Custom (diagnostic)
+          ja_JP: 任意指定（診断用）
+    label:
+      en_US: Action
+      ja_JP: 操作
+    human_description:
+      en_US: >-
+        Which flag to change and whether to set or clear it.
+        "Custom (diagnostic)" sends the Flag value / Unset value fields below verbatim.
+      ja_JP: >-
+        どのフラグをどう変更するかを選びます。未読フラグと重要フラグのみ操作できます。
+        「任意指定（診断用）」を選ぶと、下の「フラグ値」「unset 値」をそのまま API に送り、
+        変更前後の状態（Mail.MailInfoGet）も取得します。
+    llm_description: >-
+      The flag change to apply: mark_read, mark_unread, add_important or remove_important.
+      Never choose "custom" - it is a diagnostic mode for the plugin author.
+    form: llm
+  - name: folder_id
+    type: string
+    required: false
+    default: "@"
+    label:
+      en_US: Folder ID
+      ja_JP: フォルダーID
+    human_description:
+      en_US: '"@" = Inbox, "@.sent" = Sent, "@.draft" = Drafts, "@.trash" = Trash. Must match the folder the mail belongs to.'
+      ja_JP: '「@」＝受信BOX、「@.sent」＝送信BOX、「@.draft」＝下書き、「@.trash」＝ゴミ箱。メールが存在するフォルダーを指定してください。'
+    llm_description: The folder the mail belongs to. Defaults to "@" (Inbox).
+    form: llm
+  - name: flag
+    type: string
+    required: false
+    label:
+      en_US: Flag value (diagnostic)
+      ja_JP: フラグ値（診断用）
+    human_description:
+      en_US: >-
+        Only used when the action is "Custom (diagnostic)". Sent to the API verbatim, with no
+        conversion - "16", "0x00000010" and "10" are all sent as typed. Leave empty to omit the
+        flag parameter entirely.
+      ja_JP: >-
+        「任意指定（診断用）」のときだけ使われます。入力した値を加工せずそのまま API に送ります
+        （「16」「0x00000010」「10」はいずれも入力どおり）。空欄にすると flag パラメータ自体を送りません。
+    form: form
+  - name: unset
+    type: select
+    required: false
+    options:
+      - value: "0"
+        label:
+          en_US: 0 - add the flag
+          ja_JP: 0：フラグを付与
+      - value: "1"
+        label:
+          en_US: 1 - remove the flag
+          ja_JP: 1：フラグを削除
+    label:
+      en_US: Unset value (diagnostic)
+      ja_JP: unset 値（診断用）
+    human_description:
+      en_US: >-
+        Only used when the action is "Custom (diagnostic)". Leave empty to omit the unset
+        parameter entirely and see the server default.
+      ja_JP: >-
+        「任意指定（診断用）」のときだけ使われます。空欄にすると unset パラメータ自体を送らず、
+        サーバー側の既定動作を確認できます。
+    form: form
+output_schema:
+  type: object
+  properties:
+    mail_id:
+      type: string
+    folder_id:
+      type: string
+    action:
+      type: string
+    success:
+      type: boolean
+    verified:
+      type: boolean
+    unread:
+      type: boolean
+    important:
+      type: boolean
+    subject:
+      type: string
+    flag_before:
+      type: number
+    flag_after:
+      type: number
+    flag_before_hex:
+      type: string
+    flag_after_hex:
+      type: string
+extra:
+  python:
+    source: tools/mail_flag_set.py

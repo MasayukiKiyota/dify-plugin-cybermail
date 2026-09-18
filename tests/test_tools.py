@@ -16,6 +16,7 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from dify_plugin.entities.tool import ToolInvokeMessage, ToolRuntime  # noqa: E402
 
 from tools.attachment_get import AttachmentGetTool  # noqa: E402
+from tools.mail_flag_set import MailFlagSetTool  # noqa: E402
 from tools.mail_get import MailGetTool  # noqa: E402
 from tools.mail_list import MailListTool  # noqa: E402
 from utils import plugin as plugin_utils  # noqa: E402
@@ -27,6 +28,16 @@ API_KEY_CREDS = {
     "user_id": "adm@example.co.jp",
     "api_key": "KEY123",
 }
+
+# API_SESSION 専用の API（Mail.MailFlagModify 等）を通すためのクレデンシャル。
+PASSWORD_CREDS = {
+    "base_url": "https://example.cybermail.jp",
+    "auth_method": "password",
+    "user_id": "adm@example.co.jp",
+    "password": "pw",
+}
+
+SESSION = "$1234567890.adm@example.co.jp::example.cybermail.jp:jp"
 
 
 class FakeResponse:
@@ -61,8 +72,12 @@ def err(code, message):
     return FakeResponse({"status": {"code": code, "message": message}, "data": None})
 
 
-def run_tool(tool_cls, parameters, responses):
-    """Tool を実際に生成し、HTTP だけ差し替えて _invoke を実行する。"""
+def run_tool(tool_cls, parameters, responses, credentials=API_KEY_CREDS):
+    """Tool を実際に生成し、HTTP だけ差し替えて _invoke を実行する。
+
+    パスワード方式を指定した場合は最初に Core.Login が走るため、
+    responses の先頭にログイン応答を置くこと。
+    """
     http = FakeHttp(responses)
 
     def fake_create_client(tool):
@@ -77,7 +92,7 @@ def run_tool(tool_cls, parameters, responses):
         module.create_client = fake_create_client
     try:
         tool = tool_cls(
-            runtime=ToolRuntime(credentials=API_KEY_CREDS, user_id="tester", session_id="s1"),
+            runtime=ToolRuntime(credentials=credentials, user_id="tester", session_id="s1"),
             session=SimpleNamespace(storage=None),
         )
         messages = list(tool._invoke(parameters))
@@ -400,6 +415,229 @@ class AttachmentGetToolTest(unittest.TestCase):
         )
         assert_variables_match_json(self, messages)
         self.assertEqual(variables_of(messages)["attachments"], [])
+
+
+INFO_SAMPLE = {
+    "label": 0,
+    "sender_nickname": "adm",
+    "flag": 0x04000000,  # 未読でも重要でもない状態
+    "subject": "テストメール",
+    "size": 1,
+    "sender_email": "adm@example.co.jp",
+    "ctime": 1626073885,
+}
+
+
+def info(flag):
+    return ok({**INFO_SAMPLE, "flag": flag})
+
+
+def run_flag_tool(parameters, responses):
+    """フラグ操作 Tool はパスワード方式専用なので、先頭にログイン応答を補って実行する。
+
+    通常操作は Core.Login → Mail.MailFlagModify の 2 回。診断モード（custom）だけ
+    その前後に Mail.MailInfoGet が入り、4 回になる。
+    """
+    return run_tool(
+        MailFlagSetTool, parameters, [ok(SESSION)] + responses, credentials=PASSWORD_CREDS
+    )
+
+
+def run_custom(parameters, pre_flag=0x04000000, post_flag=0x04000000, post=None):
+    """診断モード用。変更前後の Mail.MailInfoGet 応答を補う。"""
+    return run_flag_tool(
+        {**parameters, "action": "custom"},
+        [info(pre_flag), ok(None), post if post is not None else info(post_flag)],
+    )
+
+
+def api_names(http):
+    return [payload["API_NAME"] for _, payload in http.calls]
+
+
+class MailFlagSetToolTest(unittest.TestCase):
+    def test_mark_read_removes_the_unread_bit(self):
+        _, http = run_flag_tool(
+            {"mail_id": "X_TOQNEGF57F", "action": "mark_read"}, [ok(None)]
+        )
+        payload = http.calls[1][1]
+        self.assertEqual(payload["API_NAME"], "Mail.MailFlagModify")
+        self.assertEqual(payload["API_SESSION"], SESSION)
+        self.assertEqual(payload["mail_id"], "X_TOQNEGF57F")
+        self.assertEqual(payload["folder_id"], "@")
+        self.assertEqual(payload["flag"], 256)
+        # 既読にする＝未読フラグを「削除」する。
+        self.assertEqual(payload["unset"], 1)
+
+    def test_mark_unread_keeps_unset_zero_in_the_payload(self):
+        """unset=0 が空値として捨てられないこと（付与が全て無効化される回帰）。"""
+        _, http = run_flag_tool(
+            {"mail_id": "M", "action": "mark_unread", "folder_id": "@.trash"}, [ok(None)]
+        )
+        payload = http.calls[1][1]
+        self.assertIn("unset", payload)
+        self.assertEqual(payload["unset"], 0)
+        self.assertEqual(payload["flag"], 256)
+        self.assertEqual(payload["folder_id"], "@.trash")
+
+    def test_important_actions_use_the_important_bit(self):
+        _, http = run_flag_tool({"mail_id": "M", "action": "add_important"}, [ok(None)])
+        self.assertEqual(http.calls[1][1]["flag"], 16)
+        self.assertEqual(http.calls[1][1]["unset"], 0)
+
+        _, http = run_flag_tool({"mail_id": "M", "action": "remove_important"}, [ok(None)])
+        self.assertEqual(http.calls[1][1]["flag"], 16)
+        self.assertEqual(http.calls[1][1]["unset"], 1)
+
+    def test_normal_action_does_not_read_the_state(self):
+        """通常操作では Mail.MailInfoGet を呼ばず、API 呼び出しを 1 回に抑えること。"""
+        messages, http = run_flag_tool({"mail_id": "M", "action": "mark_read"}, [ok(None)])
+        self.assertEqual(api_names(http), ["Core.Login", "Mail.MailFlagModify"])
+
+        result = json_of(messages)
+        self.assertTrue(result["success"])
+        self.assertFalse(result["verified"])
+        # 操作が意図した結果は確実に分かる。
+        self.assertFalse(result["unread"])
+        # 読んでいない項目は None（未取得）で、False と区別できること。
+        self.assertIsNone(result["important"])
+        self.assertIsNone(result["flag_before"])
+        self.assertIsNone(result["flag_after"])
+        self.assertEqual(result["subject"], "")
+
+        # 件名が無いので mail_id で示す。
+        text = messages_by_type(messages, ToolInvokeMessage.MessageType.TEXT)[0].message.text
+        self.assertIn("M", text)
+        self.assertIn("既読にしました", text)
+        self.assertNotIn("flag:", text)
+
+    def test_intended_state_per_action(self):
+        for action, key, expected in [
+            ("mark_read", "unread", False),
+            ("mark_unread", "unread", True),
+            ("add_important", "important", True),
+            ("remove_important", "important", False),
+        ]:
+            with self.subTest(action=action):
+                messages, _ = run_flag_tool({"mail_id": "M", "action": action}, [ok(None)])
+                result = json_of(messages)
+                self.assertEqual(result[key], expected)
+                other = "important" if key == "unread" else "unread"
+                self.assertIsNone(result[other])
+
+    def test_custom_action_reads_state_before_and_after(self):
+        """診断モードだけ変更前後の状態を読むこと。"""
+        _, http = run_custom({"mail_id": "M", "flag": "16", "unset": "0"})
+        self.assertEqual(
+            api_names(http),
+            [
+                "Core.Login",
+                "Mail.MailInfoGet",
+                "Mail.MailFlagModify",
+                "Mail.MailInfoGet",
+            ],
+        )
+
+    def test_custom_action_reports_raw_flag_values(self):
+        """decode_flag が展開しない未文書ビットも見えるよう、生の値を返すこと。"""
+        messages, _ = run_custom(
+            {"mail_id": "M", "flag": "16", "unset": "0"},
+            pre_flag=0x04000100,
+            post_flag=0x04000110,
+        )
+        result = json_of(messages)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["flag_before"], 0x04000100)
+        self.assertEqual(result["flag_after"], 0x04000110)
+        self.assertEqual(result["flag_before_hex"], "0x04000100")
+        self.assertEqual(result["flag_after_hex"], "0x04000110")
+        # 生の値から未読・重要が復元されること。
+        self.assertTrue(result["unread"])
+        self.assertTrue(result["important"])
+        self.assertEqual(result["subject"], "テストメール")
+
+        text = messages_by_type(messages, ToolInvokeMessage.MessageType.TEXT)[0].message.text
+        self.assertIn("0x04000100", text)
+        self.assertIn("0x04000110", text)
+
+    def test_custom_action_sends_values_verbatim(self):
+        """0x 付き16進も10進に変換せず、入力どおり送ること。"""
+        _, http = run_custom({"mail_id": "M", "flag": "0x00000010", "unset": "1"})
+        payload = http.calls[2][1]
+        self.assertEqual(payload["flag"], "0x00000010")
+        self.assertEqual(payload["unset"], "1")
+
+    def test_custom_action_omits_empty_values(self):
+        """空欄なら flag / unset パラメータ自体を送らないこと（既定動作の確認用）。"""
+        _, http = run_custom({"mail_id": "M", "flag": "", "unset": ""})
+        payload = http.calls[2][1]
+        self.assertNotIn("flag", payload)
+        self.assertNotIn("unset", payload)
+
+    def test_custom_action_ignores_the_preset_mapping(self):
+        """custom では ACTIONS の変換（未読/重要のビット）を通らないこと。"""
+        _, http = run_custom({"mail_id": "M", "flag": "512", "unset": "0"})
+        self.assertEqual(http.calls[2][1]["flag"], "512")
+
+    def test_custom_verification_failure_does_not_fail_the_change(self):
+        messages, _ = run_custom(
+            {"mail_id": "M", "flag": "256", "unset": "1"},
+            pre_flag=0x04000100,
+            post=err(101, "mail not found"),
+        )
+        result = json_of(messages)
+        self.assertTrue(result["success"])
+        self.assertFalse(result["verified"])
+        self.assertIsNone(result["unread"])
+        # 変更前は読めているので、そちらは返せる。
+        self.assertEqual(result["flag_before_hex"], "0x04000100")
+        self.assertIsNone(result["flag_after"])
+
+        texts = [
+            m.message.text
+            for m in messages_by_type(messages, ToolInvokeMessage.MessageType.TEXT)
+        ]
+        self.assertTrue(any("確認できませんでした" in t for t in texts))
+
+    def test_custom_pre_read_failure_does_not_stop_the_change(self):
+        messages, http = run_flag_tool(
+            {"mail_id": "M", "action": "custom", "flag": "256", "unset": "1"},
+            [err(101, "mail not found"), ok(None), info(0x04000000)],
+        )
+        self.assertEqual(http.calls[2][1]["API_NAME"], "Mail.MailFlagModify")
+        result = json_of(messages)
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["flag_before"])
+        self.assertEqual(result["flag_before_hex"], "")
+        self.assertEqual(result["flag_after_hex"], "0x04000000")
+
+    def test_api_key_auth_is_rejected_before_any_request(self):
+        # responses が空なので、HTTP を呼んだ場合は IndexError になり区別できる。
+        with self.assertRaises(ValueError) as caught:
+            run_tool(MailFlagSetTool, {"mail_id": "M", "action": "mark_read"}, [])
+        self.assertIn("API_KEY", str(caught.exception))
+
+    def test_invalid_parameters_rejected(self):
+        with self.assertRaises(ValueError):
+            run_flag_tool({"action": "mark_read"}, [])
+        with self.assertRaises(ValueError):
+            run_flag_tool({"mail_id": "M", "action": "delete"}, [])
+
+    def test_output_variables_are_set(self):
+        messages, _ = run_flag_tool({"mail_id": "M", "action": "mark_read"}, [ok(None)])
+        assert_variables_match_json(self, messages)
+
+        variables = variables_of(messages)
+        self.assertEqual(variables["action"], "mark_read")
+        self.assertTrue(variables["success"])
+        self.assertFalse(variables["unread"])
+
+    def test_output_variables_are_set_in_custom_mode(self):
+        messages, _ = run_custom(
+            {"mail_id": "M", "flag": "16", "unset": "0"}, post_flag=0x04000010
+        )
+        assert_variables_match_json(self, messages)
+        self.assertEqual(variables_of(messages)["flag_after_hex"], "0x04000010")
 
 
 if __name__ == "__main__":
