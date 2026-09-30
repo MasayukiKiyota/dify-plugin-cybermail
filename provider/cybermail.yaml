@@ -7,10 +7,10 @@ identity:
   description:
     en_US: >-
       Read mails, mail bodies and attachments from CYBERMAILΣ via its Web API,
-      and change the read / important flags.
+      change the read / important flags, and prepare mail drafts (compose screen URLs).
     ja_JP: >-
       CYBERMAILΣ の Web API 経由でメール一覧・本文・添付ファイルを取得し、
-      未読／重要フラグを変更します。
+      未読／重要フラグの変更とメール下書き（作成画面 URL）の発行を行います。
   icon: icon.svg
   tags:
     - productivity
@@ -85,6 +85,7 @@ tools:
   - tools/mail_get.yaml
   - tools/attachment_get.yaml
   - tools/mail_flag_set.yaml
+  - tools/mail_draft_create.yaml
 extra:
   python:
     source: provider/cybermail.py

@@ -16,11 +16,12 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from dify_plugin.entities.tool import ToolInvokeMessage, ToolRuntime  # noqa: E402
 
 from tools.attachment_get import AttachmentGetTool  # noqa: E402
+from tools.mail_draft_create import MailDraftCreateTool  # noqa: E402
 from tools.mail_flag_set import MailFlagSetTool  # noqa: E402
 from tools.mail_get import MailGetTool  # noqa: E402
 from tools.mail_list import MailListTool  # noqa: E402
 from utils import plugin as plugin_utils  # noqa: E402
-from utils.client import CybermailClient  # noqa: E402
+from utils.client import CybermailClient, CybermailError  # noqa: E402
 
 API_KEY_CREDS = {
     "base_url": "https://example.cybermail.jp",
@@ -638,6 +639,91 @@ class MailFlagSetToolTest(unittest.TestCase):
         )
         assert_variables_match_json(self, messages)
         self.assertEqual(variables_of(messages)["flag_after_hex"], "0x04000010")
+
+
+COMPOSE_URL = "http://example.cybermail.jp/cgi-bin/genMail?HTTP_COOKIE=key%3D$123.adm"
+
+
+def run_draft_tool(parameters, responses=None):
+    """下書き作成 Tool はパスワード方式専用なので、先頭にログイン応答を補って実行する。"""
+    return run_tool(
+        MailDraftCreateTool,
+        parameters,
+        [ok(SESSION)] + (responses if responses is not None else [ok(COMPOSE_URL)]),
+        credentials=PASSWORD_CREDS,
+    )
+
+
+class MailDraftCreateToolTest(unittest.TestCase):
+    def test_returns_compose_url(self):
+        messages, http = run_draft_tool(
+            {"to": "adm@example.co.jp", "subject": "TestMail", "content": "テストです"}
+        )
+        self.assertEqual(api_names(http), ["Core.Login", "Compose.ComposeInvoke"])
+        payload = http.calls[1][1]
+        self.assertEqual(payload["API_SESSION"], SESSION)
+        self.assertEqual(payload["to"], "adm@example.co.jp")
+        self.assertEqual(payload["subject"], "TestMail")
+        self.assertEqual(payload["content"], "テストです")
+
+        result = json_of(messages)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["compose_url"], COMPOSE_URL)
+        self.assertNotIn("content", result)
+
+        links = messages_by_type(messages, ToolInvokeMessage.MessageType.LINK)
+        self.assertEqual(links[0].message.text, COMPOSE_URL)
+        text = messages_by_type(messages, ToolInvokeMessage.MessageType.TEXT)[0].message.text
+        self.assertIn("まだ送信されていません", text)
+
+    def test_address_separators_are_normalized(self):
+        _, http = run_draft_tool(
+            {"to": "a@x.jp; b@x.jp\nc@x.jp、", "bcc": " d@x.jp ,, e@x.jp "}
+        )
+        payload = http.calls[1][1]
+        self.assertEqual(payload["to"], "a@x.jp,b@x.jp,c@x.jp")
+        self.assertEqual(payload["bcc"], "d@x.jp,e@x.jp")
+
+    def test_empty_optional_parameters_are_not_sent(self):
+        _, http = run_draft_tool({"to": "a@x.jp", "cc": "", "exclude": " ", "signature": ""})
+        payload = http.calls[1][1]
+        for name in ("cc", "bcc", "exclude", "subject", "content", "signature"):
+            self.assertNotIn(name, payload)
+
+    def test_signature_is_sent(self):
+        _, http = run_draft_tool({"cc": "a@x.jp", "signature": "1"})
+        self.assertEqual(http.calls[1][1]["signature"], "1")
+
+    def test_body_whitespace_is_preserved(self):
+        body = "  お疲れ様です。\n\n  - 項目1\n"
+        _, http = run_draft_tool({"to": "a@x.jp", "content": body})
+        self.assertEqual(http.calls[1][1]["content"], body)
+
+    def test_recipient_required_before_any_request(self):
+        # responses が空なので、HTTP を呼んだ場合は IndexError になり区別できる。
+        with self.assertRaises(ValueError):
+            run_tool(
+                MailDraftCreateTool,
+                {"to": " ", "cc": "", "subject": "x"},
+                [],
+                credentials=PASSWORD_CREDS,
+            )
+
+    def test_api_key_auth_is_rejected_before_any_request(self):
+        with self.assertRaises(ValueError) as caught:
+            run_tool(MailDraftCreateTool, {"to": "a@x.jp"}, [])
+        self.assertIn("API_KEY", str(caught.exception))
+
+    def test_missing_url_is_an_error(self):
+        for data in (None, "", {"url": COMPOSE_URL}):
+            with self.subTest(data=data):
+                with self.assertRaises(CybermailError):
+                    run_draft_tool({"to": "a@x.jp"}, [ok(data)])
+
+    def test_output_variables_are_set(self):
+        messages, _ = run_draft_tool({"to": "a@x.jp", "subject": "件名"})
+        assert_variables_match_json(self, messages)
+        self.assertEqual(variables_of(messages)["compose_url"], COMPOSE_URL)
 
 
 if __name__ == "__main__":
