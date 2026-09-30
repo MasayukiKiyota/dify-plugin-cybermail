@@ -1,0 +1,125 @@
+identity:
+  name: mail_draft_create
+  author: masayukikiyota
+  label:
+    en_US: Create mail draft
+    ja_JP: メール下書き作成
+description:
+  human:
+    en_US: >-
+      Prepare a plain-text mail in CYBERMAILΣ and return the URL of its compose screen, with the
+      recipients, subject and body already filled in. The mail is NOT sent - a person opens the
+      URL, reviews it and sends it. The URL contains the login session, so do not share it.
+    ja_JP: >-
+      CYBERMAILΣ で宛先・件名・本文を埋めたテキスト形式のメール作成画面の URL を発行します。
+      メールは送信されません。URL を開いて内容を確認し、人が送信してください。
+      URL にはログインセッションが含まれるため、第三者と共有しないでください。
+  llm: >-
+    Prepare a draft mail in CYBERMAILΣ and get the URL of its compose screen, pre-filled with the
+    recipients, subject and body. This tool never sends the mail: a person must open the returned
+    URL, review the content and press send. At least one of to, cc or bcc is required.
+    Several addresses can be given separated by commas. The body is plain text (no HTML) and
+    attachments are not supported.
+    This tool is only available when the provider is configured with the user ID / password
+    authentication method, because the underlying API does not accept an API_KEY.
+parameters:
+  - name: to
+    type: string
+    required: false
+    label:
+      en_US: To
+      ja_JP: To
+    human_description:
+      en_US: Recipient addresses, separated by commas. One of To / Cc / Bcc is required.
+      ja_JP: 宛先アドレス。複数はカンマ区切り。To / Cc / Bcc のいずれかは必須です。
+    llm_description: Comma-separated "To" addresses. One of to / cc / bcc is required.
+    form: llm
+  - name: cc
+    type: string
+    required: false
+    label:
+      en_US: Cc
+      ja_JP: Cc
+    human_description:
+      en_US: Cc addresses, separated by commas.
+      ja_JP: Cc アドレス。複数はカンマ区切り。
+    llm_description: Comma-separated "Cc" addresses.
+    form: llm
+  - name: bcc
+    type: string
+    required: false
+    label:
+      en_US: Bcc
+      ja_JP: Bcc
+    human_description:
+      en_US: Bcc addresses, separated by commas.
+      ja_JP: Bcc アドレス。複数はカンマ区切り。
+    llm_description: Comma-separated "Bcc" addresses.
+    form: llm
+  - name: exclude
+    type: string
+    required: false
+    label:
+      en_US: Excluded addresses
+      ja_JP: 除外アドレス
+    human_description:
+      en_US: Addresses to exclude from the recipients (e.g. when replying to a mailing list), separated by commas.
+      ja_JP: 宛先から除外するアドレス（メーリングリスト宛ての返信で自分を外す場合など）。複数はカンマ区切り。
+    llm_description: Comma-separated addresses to exclude from the recipients. Usually leave empty.
+    form: llm
+  - name: subject
+    type: string
+    required: false
+    label:
+      en_US: Subject
+      ja_JP: 件名
+    human_description:
+      en_US: The mail subject.
+      ja_JP: メールの件名。
+    llm_description: The mail subject.
+    form: llm
+  - name: content
+    type: string
+    required: false
+    label:
+      en_US: Body
+      ja_JP: 本文
+    human_description:
+      en_US: The mail body as plain text. Line breaks are kept as-is.
+      ja_JP: メール本文（テキスト形式）。改行はそのまま反映されます。
+    llm_description: The mail body as plain text. Do not use HTML or Markdown.
+    form: llm
+  - name: signature
+    type: string
+    required: false
+    label:
+      en_US: Signature
+      ja_JP: 署名
+    human_description:
+      en_US: >-
+        The signature to insert, given by its position on the signature settings screen
+        (e.g. "1" for the first one). Leave empty to omit it.
+      ja_JP: >-
+        挿入する署名を、署名設定画面での表示順で指定します（先頭の署名なら「1」）。
+        空欄の場合は指定しません。
+    form: form
+output_schema:
+  type: object
+  properties:
+    success:
+      type: boolean
+    compose_url:
+      type: string
+    to:
+      type: string
+    cc:
+      type: string
+    bcc:
+      type: string
+    exclude:
+      type: string
+    subject:
+      type: string
+extra:
+  python:
+    source: tools/mail_draft_create.py

@@ -1,6 +1,6 @@
 # CyberMail (CYBERMAILΣ) Dify プラグイン
 
-CYBERMAILΣ の Web API 経由で、メール一覧・本文・添付ファイルを Dify のワークフロー／エージェントから取得し、未読／重要フラグを変更するための Tool プラグインです。書き込みは**フラグ変更のみ**で、メールの送信・削除・移動は行いません。
+CYBERMAILΣ の Web API 経由で、メール一覧・本文・添付ファイルを Dify のワークフロー／エージェントから取得し、未読／重要フラグの変更とメール下書き（作成画面 URL）の発行を行うための Tool プラグインです。書き込みは**フラグ変更と下書き作成のみ**で、メールの送信・削除・移動は行いません。
 
 ## 認証
 
@@ -85,6 +85,19 @@ Provider 設定で次のいずれかの方式を選びます。どちらの場�
 - `unset` — 0（付与）／1（削除）。空欄にすると `unset` パラメータ自体を送りません
 - どちらもツール設定画面でのみ指定でき、LLM からは選ばれません（`form: form`）
 
+### メール下書き作成 (`mail_draft_create`)
+
+`Compose.ComposeInvoke` を使い、宛先・件名・本文を埋めた**メール作成画面の URL** を発行します。
+**メールは送信されません。** 返った URL を開いて内容を確認し、人が送信ボタンを押す運用を想定しています。
+
+- パラメータ: `to` / `cc` / `bcc`（いずれか 1 つ必須）、`exclude`（除外アドレス）、`subject`、`content`（本文）、`signature`
+- 複数アドレスはカンマ区切り。`;` や改行で区切られていてもカンマ区切りに揃えて送ります
+- 本文は**テキスト形式のみ**（API の仕様）。添付ファイルは付けられません
+- `signature` は署名設定画面での表示順（先頭なら `1`）。ツール設定画面でのみ指定でき、LLM からは選ばれません（`form: form`）
+- URL は `compose_url` 出力変数と、Dify の LINK メッセージの両方で返します。本文は入力そのものなので出力には含めません
+- **「ユーザID/パスワード」方式でのみ利用できます。** `Compose.ComposeInvoke` は API_SESSION 専用のため、API_KEY 方式では実行時にエラーになります
+- **URL にはログインセッション（API_SESSION）が含まれます。** URL を知っていればそのメールボックスを操作できてしまうため、チャットのログや第三者に共有しないでください
+
 ## 典型的なワークフロー
 
 ```
@@ -93,15 +106,20 @@ Provider 設定で次のいずれかの方式を選びます。どちらの場�
     → メール本文取得 (mail_id)      → LLM で要約・分類
     → 添付ファイル取得 (mail_id)    → ドキュメント抽出ノード
     → メールフラグ変更 (mail_id, action=mark_read)  ※処理済みのメールを既読にする
+
+メール本文取得 (mail_id)
+  → LLM で返信案を作成
+    → メール下書き作成 (to=差出人, subject="Re: ...", content=返信案)
+      → compose_url を開いて人が確認・送信
 ```
 
 ## 対応 API と未対応 API
 
-対応: `Core.Login` / `Core.SessionCheck` / `Core.KeyCheck` / `Mail.MailListGet` / `Mail.SystemMailListGet` / `Mail.SystemMailBoxListGet` / `Mail.MailAdvanceGet` / `Mail.AttachmentGet` / `Mail.MailFlagModify` / `Mail.MailInfoGet`
+対応: `Core.Login` / `Core.SessionCheck` / `Core.KeyCheck` / `Mail.MailListGet` / `Mail.SystemMailListGet` / `Mail.SystemMailBoxListGet` / `Mail.MailAdvanceGet` / `Mail.AttachmentGet` / `Mail.MailFlagModify` / `Mail.MailInfoGet` / `Compose.ComposeInvoke`
 
 未対応（今後の拡張余地）:
 
-- メール送信 — Mail モジュールに送信 API が存在しないため（別モジュールの仕様が必要）
+- `Compose.MailSend`（メール送信）— LLM による誤送信を避けるため対象外。送信は下書き作成の URL から人が行います
 - `Mail.MailMove` — メールの移動・削除は誤削除リスクを避けるため対象外
 - `Mail.VirtualFolder*`（分類表示BOX）、`Mail.MailReadReceiptSend`（開封通知）、`Mail.AttachmentPack`（ZIP 一括）
 
