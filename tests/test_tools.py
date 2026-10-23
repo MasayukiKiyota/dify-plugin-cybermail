@@ -54,13 +54,20 @@ class FakeResponse:
     def json(self):
         return json.loads(self.text)
 
+    def iter_content(self, chunk_size=1):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start : start + chunk_size]
+
+    def close(self):
+        pass
+
 
 class FakeHttp:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
 
-    def post(self, url, data=None, timeout=None):
+    def post(self, url, data=None, timeout=None, **kwargs):
         self.calls.append((url, dict(data or {})))
         return self.responses.pop(0)
 
@@ -242,6 +249,21 @@ class MailListToolTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_tool(MailListTool, {"sort_by": "priority"}, [ok([])])
 
+    def test_max_entry_and_bgn_idx_ranges_are_enforced_in_code(self):
+        """YAML の min/max に頼らず、0・負値・上限超過を拒否する（全件取得の防止）。"""
+        for params in (
+            {"max_entry": 0},
+            {"max_entry": -1},
+            {"max_entry": 201},
+            {"bgn_idx": 0},
+        ):
+            with self.subTest(params=params):
+                with self.assertRaises(ValueError):
+                    run_tool(MailListTool, params, [ok([])])
+        _, http = run_tool(MailListTool, {"max_entry": 200, "bgn_idx": 1}, [ok([])])
+        self.assertEqual(http.calls[0][1]["max_entry"], 200)
+        self.assertEqual(http.calls[0][1]["bgn_idx"], 1)
+
     def test_output_variables_are_set(self):
         messages, _ = run_tool(MailListTool, {"folder_id": "@"}, [ok(LIST_SAMPLE)])
         assert_variables_match_json(self, messages)
@@ -391,6 +413,69 @@ class AttachmentGetToolTest(unittest.TestCase):
     def test_missing_mail_id_rejected(self):
         with self.assertRaises(ValueError):
             run_tool(AttachmentGetTool, {}, [ok(MAIL_SAMPLE)])
+
+    def test_malformed_hash_is_rejected_before_any_request(self):
+        for bad in ("../x", "a b", "h;rm", "x" * 129):
+            with self.subTest(hash=bad):
+                with self.assertRaises(ValueError):
+                    run_tool(AttachmentGetTool, {"mail_id": "M", "hash": bad}, [])
+
+    def test_server_supplied_filename_and_mime_are_sanitized(self):
+        """送信者が付けたファイル名・Content-Type をそのまま files 出力に乗せない。"""
+        sample = {
+            **MAIL_SAMPLE,
+            "attachments": [
+                {
+                    "filename": "../../../etc/passwd",
+                    "hash": "h1",
+                    "size": 5,
+                    "contentType": "text/html; <script>",
+                }
+            ],
+            "inlineAttachments": [],
+        }
+        messages, _ = run_tool(
+            AttachmentGetTool,
+            {"mail_id": "M"},
+            [ok(sample), FakeResponse(b"hello", content_type="text/html")],
+        )
+        blob = messages_by_type(messages, ToolInvokeMessage.MessageType.BLOB)[0]
+        self.assertEqual(blob.meta["filename"], "passwd")
+        self.assertEqual(blob.meta["mime_type"], "application/octet-stream")
+        result = json_of(messages)
+        self.assertEqual(result["attachments"][0]["filename"], "passwd")
+
+    def test_unknown_hash_filename_is_sanitized(self):
+        messages, _ = run_tool(
+            AttachmentGetTool,
+            {"mail_id": "M", "hash": "zz99"},
+            [ok(MAIL_SAMPLE), FakeResponse(b"raw", content_type="application/octet-stream")],
+        )
+        blob = messages_by_type(messages, ToolInvokeMessage.MessageType.BLOB)[0]
+        self.assertEqual(blob.meta["filename"], "zz99.bin")
+
+    def test_oversized_attachment_is_skipped_without_request(self):
+        """メタ情報で上限超過が分かる添付は API を呼ばず失敗扱いにし、残りは続行する。"""
+        import tools.attachment_get as module
+
+        original = module.MAX_ATTACHMENT_BYTES
+        module.MAX_ATTACHMENT_BYTES = 100
+        try:
+            messages, http = run_tool(
+                AttachmentGetTool,
+                {"mail_id": "M"},
+                [ok(MAIL_SAMPLE), FakeResponse(b"hello", content_type="text/plain")],
+            )
+        finally:
+            module.MAX_ATTACHMENT_BYTES = original
+        # 1 件目（79479 bytes）はスキップ、2 件目（12 bytes）だけ取得される。
+        self.assertEqual(api_names(http), ["Mail.MailAdvanceGet", "Mail.AttachmentGet"])
+        self.assertEqual(http.calls[1][1]["hash"], "aa11")
+        result = json_of(messages)
+        self.assertEqual(result["downloaded_count"], 1)
+        self.assertEqual(result["failed_count"], 1)
+        self.assertFalse(result["attachments"][0]["success"])
+        self.assertIn("大きすぎます", result["attachments"][0]["error"])
 
     def test_output_variables_are_set_without_shadowing_files(self):
         messages, _ = run_tool(
@@ -698,6 +783,15 @@ class MailDraftCreateToolTest(unittest.TestCase):
         body = "  お疲れ様です。\n\n  - 項目1\n"
         _, http = run_draft_tool({"to": "a@x.jp", "content": body})
         self.assertEqual(http.calls[1][1]["content"], body)
+
+    def test_subject_line_breaks_are_removed(self):
+        """件名の改行はヘッダインジェクションの余地になるため空白にする。本文は触らない。"""
+        _, http = run_draft_tool(
+            {"to": "a@x.jp", "subject": "件名\r\nBcc: evil@x.jp\n", "content": "a\nb"}
+        )
+        payload = http.calls[1][1]
+        self.assertEqual(payload["subject"], "件名 Bcc: evil@x.jp")
+        self.assertEqual(payload["content"], "a\nb")
 
     def test_recipient_required_before_any_request(self):
         # responses が空なので、HTTP を呼んだ場合は IndexError になり区別できる。

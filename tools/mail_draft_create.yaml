@@ -20,6 +20,9 @@ description:
     URL, review the content and press send. At least one of to, cc or bcc is required.
     Several addresses can be given separated by commas. The body is plain text (no HTML) and
     attachments are not supported.
+    The returned URL contains the user's login session: present it to the user as-is, never
+    summarize, rewrite or send it anywhere else, and only put addresses the user asked for into
+    to / cc / bcc.
     This tool is only available when the provider is configured with the user ID / password
     authentication method, because the underlying API does not accept an API_KEY.
 parameters:

@@ -17,13 +17,20 @@ from utils.client import (  # noqa: E402
     normalize_base_url,
 )
 from utils.flags import decode_flag, decode_label, parse_flag_filter, to_jst_iso  # noqa: E402
-from utils.mail import format_address, format_address_list, normalize_mail  # noqa: E402
+from utils.mail import (  # noqa: E402
+    format_address,
+    format_address_list,
+    normalize_mail,
+    sanitize_filename,
+    sanitize_mime_type,
+)
 
 
 class FakeResponse:
-    def __init__(self, payload, status_code=200, content_type="application/json"):
+    def __init__(self, payload, status_code=200, content_type="application/json", headers=None):
         self.status_code = status_code
-        self.headers = {"Content-Type": content_type}
+        self.headers = {"Content-Type": content_type, **(headers or {})}
+        self.closed = False
         if isinstance(payload, bytes):
             self.content = payload
             self._json = None
@@ -40,16 +47,25 @@ class FakeResponse:
             return json.loads(self.text)
         return self._json
 
+    def iter_content(self, chunk_size=1):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start : start + chunk_size]
+
+    def close(self):
+        self.closed = True
+
 
 class FakeHttp:
-    """requests.Session の差し替え。呼び出し履歴を記録し、応答を順に返す。"""
+    """requests.Session の差し替え。呼び出し履歴と kwargs を記録し、応答を順に返す。"""
 
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self.kwargs = []
 
-    def post(self, url, data=None, timeout=None):
+    def post(self, url, data=None, timeout=None, **kwargs):
         self.calls.append((url, dict(data or {})))
+        self.kwargs.append({"timeout": timeout, **kwargs})
         return self.responses.pop(0)
 
 
@@ -104,6 +120,13 @@ class BaseUrlTest(unittest.TestCase):
     def test_rejects_empty(self):
         with self.assertRaises(CybermailError):
             normalize_base_url("")
+
+    def test_rejects_plain_http(self):
+        """認証情報やメール本文を平文で送らないよう、https 以外は受け付けない。"""
+        for raw in ("http://example.cybermail.jp", "ftp://example.cybermail.jp", "HTTP://x.jp"):
+            with self.assertRaises(CybermailError, msg=raw):
+                normalize_base_url(raw)
+        self.assertEqual(normalize_base_url("HTTPS://example.cybermail.jp"), "HTTPS://example.cybermail.jp")
 
 
 class CredentialValidationTest(unittest.TestCase):
@@ -195,6 +218,27 @@ class ErrorHandlingTest(unittest.TestCase):
         with self.assertRaises(CybermailError):
             client.call("Mail.MailAdvanceGet", {})
 
+    def test_redirect_is_not_followed_and_is_an_error(self):
+        """307/308 で認証情報付き POST が別ホストへ再送されないよう、追従せずエラーにする。"""
+        client = CybermailClient(API_KEY_CREDS)
+        client._http = FakeHttp(
+            [FakeResponse(b"", status_code=307, headers={"Location": "https://evil.example/"})]
+        )
+        with self.assertRaises(CybermailError) as ctx:
+            client.call("Mail.MailAdvanceGet", {})
+        self.assertIn("リダイレクト", str(ctx.exception))
+        self.assertFalse(client._http.kwargs[0]["allow_redirects"])
+
+    def test_status_not_a_dict_is_unexpected_format(self):
+        """status が文字列などの場合、AttributeError ではなく CybermailError にする。"""
+        client = CybermailClient(API_KEY_CREDS)
+        for body in ({"status": "ok"}, {"status": None}, {"status": {"code": "0"}}, []):
+            with self.subTest(body=body):
+                client._http = FakeHttp([FakeResponse(body)])
+                with self.assertRaises(CybermailError) as ctx:
+                    client.call("Mail.MailAdvanceGet", {})
+                self.assertNotIsInstance(ctx.exception, CybermailAPIError)
+
 
 class BinaryTest(unittest.TestCase):
     def test_binary_returns_content(self):
@@ -222,6 +266,57 @@ class BinaryTest(unittest.TestCase):
         client._http = FakeHttp([FakeResponse(body, content_type="application/octet-stream")])
         with self.assertRaises(CybermailAPIError):
             client.call_binary("Mail.AttachmentGet", {"hash": "abc"})
+
+    def test_binary_request_uses_stream_and_no_redirects(self):
+        client = CybermailClient(API_KEY_CREDS)
+        client._http = FakeHttp([FakeResponse(b"x", content_type="application/octet-stream")])
+        client.call_binary("Mail.AttachmentGet", {"hash": "abc"})
+        self.assertTrue(client._http.kwargs[0]["stream"])
+        self.assertFalse(client._http.kwargs[0]["allow_redirects"])
+
+    def test_json_attachment_is_returned_as_file(self):
+        """添付ファイル自体が JSON でも、API 応答の形でなければファイルとして返す。"""
+        client = CybermailClient(API_KEY_CREDS)
+        for body in (
+            b'{"status": "ok", "items": []}',  # status が dict ではない
+            b'{"status": {"state": "done"}}',  # code が無い
+            b'{"status": {"code": "0"}}',  # code が文字列
+            b'{"result": 1}',
+        ):
+            with self.subTest(body=body):
+                client._http = FakeHttp([FakeResponse(body, content_type="application/json")])
+                content, _ = client.call_binary("Mail.AttachmentGet", {"hash": "abc"})
+                self.assertEqual(content, body)
+
+    def test_oversized_attachment_is_rejected(self):
+        """上限を超える添付は読み込みを打ち切り、接続を閉じてエラーにする。"""
+        import utils.client as client_module
+
+        original = client_module.MAX_ATTACHMENT_BYTES
+        client_module.MAX_ATTACHMENT_BYTES = 10
+        try:
+            client = CybermailClient(API_KEY_CREDS)
+            # 本文で超過するケース
+            response = FakeResponse(b"x" * 11, content_type="application/octet-stream")
+            client._http = FakeHttp([response])
+            with self.assertRaises(CybermailError) as ctx:
+                client.call_binary("Mail.AttachmentGet", {"hash": "abc"})
+            self.assertIn("大きすぎます", str(ctx.exception))
+            self.assertTrue(response.closed)
+            # Content-Length で事前に超過が分かるケース
+            response = FakeResponse(
+                b"x", content_type="application/octet-stream", headers={"Content-Length": "999"}
+            )
+            client._http = FakeHttp([response])
+            with self.assertRaises(CybermailError):
+                client.call_binary("Mail.AttachmentGet", {"hash": "abc"})
+            self.assertTrue(response.closed)
+            # 上限ちょうどは通る
+            client._http = FakeHttp([FakeResponse(b"x" * 10, content_type="application/octet-stream")])
+            content, _ = client.call_binary("Mail.AttachmentGet", {"hash": "abc"})
+            self.assertEqual(len(content), 10)
+        finally:
+            client_module.MAX_ATTACHMENT_BYTES = original
 
 
 class SessionTest(unittest.TestCase):
@@ -326,6 +421,8 @@ class FlagTest(unittest.TestCase):
         self.assertIsNone(parse_flag_filter(None))
         with self.assertRaises(ValueError):
             parse_flag_filter("unread")
+        with self.assertRaises(ValueError):
+            parse_flag_filter("-256")
 
     def test_to_jst_iso(self):
         # 1626073885 は UTC 2021-07-12T07:11:25 なので JST では 16:11:25。
@@ -389,6 +486,45 @@ class MailNormalizeTest(unittest.TestCase):
         self.assertEqual(mail["subject"], "")
         self.assertEqual(mail["attachments"], [])
         self.assertIsNone(mail["date"])
+
+    def test_attachment_filename_and_mime_are_sanitized(self):
+        """送信者が付けた添付ファイル名・Content-Type をそのまま下流に流さない。"""
+        mail = normalize_mail(
+            {
+                "attachments": [
+                    {"filename": "../../etc/passwd", "hash": "h1", "contentType": "text/plain"},
+                    {"filename": "C:\\Users\\x\\..\\evil.exe", "hash": "h2", "contentType": "x"},
+                    {"filename": "a\x00b\r\n.txt", "hash": "h3", "contentType": "text/html; charset=utf-8"},
+                    {"filename": "..", "hash": "h4", "contentType": "image/png"},
+                    {"filename": "", "hash": 12345},
+                ]
+            },
+            "M",
+            "@",
+        )
+        names = [item["filename"] for item in mail["attachments"]]
+        self.assertEqual(names, ["passwd", "evil.exe", "ab.txt", "attachment_4", "attachment_5"])
+        types = [item["content_type"] for item in mail["attachments"]]
+        self.assertEqual(
+            types,
+            [
+                "text/plain",
+                "application/octet-stream",
+                "application/octet-stream",
+                "image/png",
+                "application/octet-stream",
+            ],
+        )
+        self.assertEqual(mail["attachments"][4]["hash"], "12345")
+
+    def test_sanitize_filename_limits_length(self):
+        long_name = "あ" * 200 + ".txt"
+        sanitized = sanitize_filename(long_name)
+        self.assertLessEqual(len(sanitized.encode("utf-8")), 255)
+        self.assertEqual(sanitize_filename(None, "fallback.bin"), "fallback.bin")
+        self.assertEqual(sanitize_filename(".hidden"), "hidden")
+        self.assertEqual(sanitize_mime_type(" Application/PDF "), "application/pdf")
+        self.assertEqual(sanitize_mime_type(None), "application/octet-stream")
 
 
 if __name__ == "__main__":

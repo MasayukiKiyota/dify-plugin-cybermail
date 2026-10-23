@@ -96,4 +96,6 @@ def parse_flag_filter(raw: Any) -> str | None:
         raise ValueError(
             f"flag_filter の値を解釈できません: {text!r}（例: 0x00000100 または 256）"
         ) from None
+    if value < 0:
+        raise ValueError(f"flag_filter に負の値は指定できません: {text!r}")
     return f"0x{value:08x}"

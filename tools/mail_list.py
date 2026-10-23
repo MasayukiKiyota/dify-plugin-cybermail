@@ -7,6 +7,10 @@ from dify_plugin.entities.tool import ToolInvokeMessage
 from utils.flags import FLAG_UNREAD, decode_flag, decode_label, parse_flag_filter, to_jst_iso
 from utils.plugin import create_client, emit_result, get_bool, get_int, get_str
 
+# mail_list.yaml の max_entry の max と揃える。省略時に全件返る API なので上限を設ける。
+MAX_ENTRY_LIMIT = 200
+DEFAULT_MAX_ENTRY = 20
+
 VALID_SORT_BY = {
     "date",
     "rdate",
@@ -44,10 +48,17 @@ class MailListTool(Tool):
         }
 
         # max_entry を省略すると仕様上フォルダー内の全件が返るため、既定値で歯止めをかける。
+        # YAML の min/max に頼らず、コード側でも範囲を検証する。
         max_entry = get_int(tool_parameters, "max_entry")
-        params["max_entry"] = 20 if max_entry is None else max_entry
+        if max_entry is None:
+            max_entry = DEFAULT_MAX_ENTRY
+        if not 1 <= max_entry <= MAX_ENTRY_LIMIT:
+            raise ValueError(f"max_entry は 1〜{MAX_ENTRY_LIMIT} の範囲で指定してください: {max_entry}")
+        params["max_entry"] = max_entry
         bgn_idx = get_int(tool_parameters, "bgn_idx")
         if bgn_idx is not None:
+            if bgn_idx < 1:
+                raise ValueError(f"bgn_idx は 1 以上で指定してください: {bgn_idx}")
             params["bgn_idx"] = bgn_idx
 
         # API_KEY 方式ではログインユーザ用 API が使えないため、ユーザ指定版を呼ぶ。

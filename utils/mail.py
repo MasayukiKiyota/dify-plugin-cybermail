@@ -3,9 +3,39 @@
 mail_get と attachment_get の両方が同じ応答を読むため、整形はここに集約する。
 """
 
+import re
 from typing import Any
 
 from utils.flags import to_jst_iso
+
+DEFAULT_MIME_TYPE = "application/octet-stream"
+MAX_FILENAME_BYTES = 255
+
+_MIME_TYPE_RE = re.compile(r"^[\w.+-]+/[\w.+-]+$")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def sanitize_filename(name: Any, fallback: str = "attachment") -> str:
+    """サーバ応答由来のファイル名から、パス要素と制御文字を取り除く。
+
+    添付ファイル名はメール送信者が自由に付けられるため、``../`` や
+    ディレクトリ区切り、制御文字をそのまま下流に渡さない。
+    """
+    text = "" if name is None else str(name)
+    # パス区切りで分割して最後の要素だけを使う（``..`` 要素は捨てる）。
+    parts = [part for part in re.split(r"[\\/]+", text) if part not in ("", ".", "..")]
+    text = parts[-1] if parts else ""
+    text = _CONTROL_CHARS_RE.sub("", text).strip().lstrip(".")
+    encoded = text.encode("utf-8")
+    if len(encoded) > MAX_FILENAME_BYTES:
+        text = encoded[:MAX_FILENAME_BYTES].decode("utf-8", errors="ignore")
+    return text or fallback
+
+
+def sanitize_mime_type(value: Any) -> str:
+    """``type/subtype`` の形になっていない Content-Type は既定値に置き換える。"""
+    text = "" if value is None else str(value).strip().lower()
+    return text if _MIME_TYPE_RE.match(text) else DEFAULT_MIME_TYPE
 
 
 def format_address(value: Any) -> str:
@@ -42,15 +72,15 @@ def normalize_attachments(entries: Any, inline: bool = False) -> list[dict[str, 
         return []
 
     result: list[dict[str, Any]] = []
-    for entry in entries:
+    for index, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
             continue
         result.append(
             {
-                "filename": entry.get("filename") or "",
-                "hash": entry.get("hash") or "",
+                "filename": sanitize_filename(entry.get("filename"), f"attachment_{index}"),
+                "hash": str(entry.get("hash") or ""),
                 "size": entry.get("size"),
-                "content_type": entry.get("contentType") or "application/octet-stream",
+                "content_type": sanitize_mime_type(entry.get("contentType")),
                 "inline": inline,
             }
         )

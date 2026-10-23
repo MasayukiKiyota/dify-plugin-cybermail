@@ -1,12 +1,16 @@
+import re
 from collections.abc import Generator
 from typing import Any
 
 from dify_plugin import Tool
 from dify_plugin.entities.tool import ToolInvokeMessage
 
-from utils.client import CybermailError
-from utils.mail import normalize_attachments
+from utils.client import MAX_ATTACHMENT_BYTES, CybermailError
+from utils.mail import normalize_attachments, sanitize_filename
 from utils.plugin import create_client, emit_result, get_bool, get_str
+
+# 添付の hash は 16 進文字列。LLM 入力をそのまま API やファイル名に流さないため形式を縛る。
+_HASH_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class AttachmentGetTool(Tool):
@@ -19,6 +23,8 @@ class AttachmentGetTool(Tool):
 
         folder_id = get_str(tool_parameters, "folder_id", "@")
         wanted_hash = get_str(tool_parameters, "hash")
+        if wanted_hash and not _HASH_RE.match(wanted_hash):
+            raise ValueError("hash の形式が不正です。「メール本文取得」の attachments[].hash を指定してください。")
         include_inline = get_bool(tool_parameters, "include_inline")
 
         client = create_client(self)
@@ -42,7 +48,7 @@ class AttachmentGetTool(Tool):
             # メタ情報に無い hash でも、指定されたものはそのまま取得を試みる。
             targets = matched or [
                 {
-                    "filename": f"{wanted_hash}.bin",
+                    "filename": sanitize_filename(f"{wanted_hash}.bin", "attachment.bin"),
                     "hash": wanted_hash,
                     "size": None,
                     "content_type": "application/octet-stream",
@@ -68,6 +74,12 @@ class AttachmentGetTool(Tool):
         results: list[dict[str, Any]] = []
         for index, item in enumerate(targets, start=1):
             filename = item["filename"] or f"attachment_{index}"
+            # メタ情報の時点で上限超過が分かるものは API を呼ばずに失敗として記録する。
+            if isinstance(item.get("size"), int) and item["size"] > MAX_ATTACHMENT_BYTES:
+                error = f"ファイルが大きすぎます（上限 {MAX_ATTACHMENT_BYTES} バイト）。"
+                results.append({**item, "success": False, "error": error})
+                yield self.create_text_message(f"添付ファイル {filename} の取得をスキップしました: {error}")
+                continue
             try:
                 content, content_type = client.call_binary(
                     "Mail.AttachmentGet",

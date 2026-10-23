@@ -1,2 +1,9 @@
 dify_plugin>=0.7.0,<0.8.0
-requests>=2.31.0
+# dify_plugin 0.7.x pins requests~=2.32.3 and Flask~=3.0.3, so requests 2.33 / Flask 3.1
+# cannot be required until the SDK is upgraded (their advisories do not affect this plugin).
+requests>=2.32.4,<3
+# Transitive dependencies with known-vulnerability fixes that affect the HTTPS path.
+urllib3>=2.8.0,<3
+certifi>=2026.10.19
+werkzeug>=3.1.9
+multidict>=6.9.1

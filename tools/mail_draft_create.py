@@ -11,6 +11,7 @@ from utils.plugin import create_client, emit_result, get_str
 # 宛先の区切りとして受け付ける文字。LLM は「;」や改行で並べがちなため、
 # API が受け付けるカンマ区切りに寄せる。
 _ADDRESS_SEPARATORS = re.compile(r"[,;\n\r、，；]+")
+_SUBJECT_LINE_BREAKS = re.compile(r"[\r\n]+")
 
 
 def _normalize_addresses(raw: str) -> str:
@@ -27,7 +28,8 @@ class MailDraftCreateTool(Tool):
         cc = _normalize_addresses(get_str(tool_parameters, "cc"))
         bcc = _normalize_addresses(get_str(tool_parameters, "bcc"))
         exclude = _normalize_addresses(get_str(tool_parameters, "exclude"))
-        subject = get_str(tool_parameters, "subject")
+        # 件名に改行は不要で、ヘッダインジェクションの余地を残さないため空白に置き換える。
+        subject = _SUBJECT_LINE_BREAKS.sub(" ", get_str(tool_parameters, "subject")).strip()
         # 本文は改行やインデントに意味があるため strip しない。
         content = tool_parameters.get("content")
         content = "" if content is None else str(content)

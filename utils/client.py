@@ -18,7 +18,11 @@ from typing import Any
 
 import requests
 
-DEFAULT_TIMEOUT = 30
+# 接続タイムアウトと読み取り（バイト間）タイムアウト。
+DEFAULT_TIMEOUT = (10, 30)
+
+# 添付ファイル 1 件あたりの受信上限。超えた場合は読み込みを打ち切ってエラーにする。
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
 AUTH_API_KEY = "api_key"
 AUTH_PASSWORD = "password"
@@ -60,6 +64,9 @@ def normalize_base_url(raw: str) -> str:
         raise CybermailError("Base URL が設定されていません。")
     if "://" not in url:
         url = "https://" + url
+    # パスワードやセッション、メール本文を平文で流さないよう https 以外は拒否する。
+    if not url.lower().startswith("https://"):
+        raise CybermailError("Base URL は https:// で始まる必要があります。")
     url = url.rstrip("/")
     for suffix in ("/cgi-bin/cgi_api_binary", "/cgi-bin/cgi_api", "/cgi-bin"):
         if url.endswith(suffix):
@@ -75,7 +82,7 @@ class CybermailClient:
         self,
         credentials: dict[str, Any],
         storage: Any = None,
-        timeout: int = DEFAULT_TIMEOUT,
+        timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
     ) -> None:
         self.base_url = normalize_base_url(credentials.get("base_url", ""))
         self.auth_method = (credentials.get("auth_method") or AUTH_PASSWORD).strip()
@@ -115,24 +122,38 @@ class CybermailClient:
     def _binary_endpoint(self) -> str:
         return f"{self.base_url}/cgi-bin/cgi_api_binary"
 
-    def _post(self, url: str, api_name: str, params: dict[str, Any]) -> requests.Response:
+    def _post(
+        self, url: str, api_name: str, params: dict[str, Any], stream: bool = False
+    ) -> requests.Response:
         payload = {"API_NAME": api_name}
         for key, value in params.items():
             if value is None or value == "":
                 continue
             payload[key] = value
         try:
-            return self._http.post(url, data=payload, timeout=self.timeout)
+            # リダイレクトを追うと 307/308 で認証情報付きの POST が別ホストへ再送され得るため追わない。
+            return self._http.post(
+                url, data=payload, timeout=self.timeout, allow_redirects=False, stream=stream
+            )
         except requests.RequestException as exc:
             raise CybermailError(f"{api_name}: CYBERMAIL への接続に失敗しました: {exc}") from exc
 
     @staticmethod
-    def _unwrap(response: requests.Response, api_name: str) -> Any:
-        """``{"status": ..., "data": ...}`` を検証して data を返す。"""
+    def _check_http_status(response: requests.Response, api_name: str) -> None:
+        if 300 <= response.status_code < 400:
+            raise CybermailError(
+                f"{api_name}: HTTP {response.status_code} でリダイレクトされました。"
+                "Base URL を確認してください。"
+            )
         if response.status_code >= 400:
             raise CybermailError(
                 f"{api_name}: HTTP {response.status_code} が返りました。Base URL を確認してください。"
             )
+
+    @staticmethod
+    def _unwrap(response: requests.Response, api_name: str) -> Any:
+        """``{"status": ..., "data": ...}`` を検証して data を返す。"""
+        CybermailClient._check_http_status(response, api_name)
         try:
             body = response.json()
         except ValueError:
@@ -144,13 +165,21 @@ class CybermailClient:
 
     @staticmethod
     def _unwrap_body(body: Any, api_name: str) -> Any:
-        if not isinstance(body, dict) or "status" not in body:
+        if not CybermailClient._looks_like_status_body(body):
             raise CybermailError(f"{api_name}: 想定外の応答形式です: {str(body)[:200]!r}")
-        status = body.get("status") or {}
+        status = body["status"]
         code = status.get("code", -1)
         if code != 0:
-            raise CybermailAPIError(code, status.get("message", ""), api_name)
+            raise CybermailAPIError(code, str(status.get("message", "")), api_name)
         return body.get("data")
+
+    @staticmethod
+    def _looks_like_status_body(body: Any) -> bool:
+        """``{"status": {"code": int, ...}}`` の形をしているか。"""
+        if not isinstance(body, dict):
+            return False
+        status = body.get("status")
+        return isinstance(status, dict) and isinstance(status.get("code"), int)
 
     # ------------------------------------------------------------------ セッション
 
@@ -254,7 +283,7 @@ class CybermailClient:
     ) -> Any:
         url = self._binary_endpoint if binary else self._json_endpoint
         request_params = {**params, **self._auth_params(api_name, user_scoped)}
-        response = self._post(url, api_name, request_params)
+        response = self._post(url, api_name, request_params, stream=binary)
 
         try:
             return self._handle(response, api_name, binary)
@@ -265,7 +294,7 @@ class CybermailClient:
                 raise
             self.login()
             retry_params = {**params, **self._auth_params(api_name, user_scoped)}
-            retry_response = self._post(url, api_name, retry_params)
+            retry_response = self._post(url, api_name, retry_params, stream=binary)
             return self._handle(retry_response, api_name, binary)
 
     def _should_retry_with_new_session(self) -> bool:
@@ -277,13 +306,12 @@ class CybermailClient:
         if not binary:
             return self._unwrap(response, api_name)
 
-        if response.status_code >= 400:
-            raise CybermailError(
-                f"{api_name}: HTTP {response.status_code} が返りました。Base URL を確認してください。"
-            )
-        content = response.content or b""
+        self._check_http_status(response, api_name)
+        content = self._read_limited(response, api_name)
         # バイナリ用エンドポイントでもエラー時は JSON が返るため、ファイルとして
         # 返す前に判別する。Content-Type が誤っていても本文の形で拾えるようにする。
+        # ただし添付ファイル自体が JSON であり得るため、status.code が整数の
+        # 応答オブジェクトの形をしている場合に限ってエラー判定する。
         content_type = (response.headers.get("Content-Type") or "").lower()
         looks_like_status = content[:64].lstrip().startswith(b'{"status"')
         if "json" in content_type or looks_like_status:
@@ -292,10 +320,40 @@ class CybermailClient:
             except ValueError:
                 pass
             else:
-                if isinstance(body, dict) and "status" in body:
+                if self._looks_like_status_body(body):
                     # code=0 の JSON がここに来ることは想定していないが、
                     # 来た場合はエラー判定だけ行い本体はそのまま返す。
                     self._unwrap_body(body, api_name)
         if not content:
             raise CybermailError(f"{api_name}: 空のファイルが返りました。")
         return content, content_type or "application/octet-stream"
+
+    @staticmethod
+    def _read_limited(response: requests.Response, api_name: str) -> bytes:
+        """応答本体を上限付きで読む。上限を超えたら切断してエラーにする。"""
+        declared = response.headers.get("Content-Length")
+        try:
+            if declared is not None and int(declared) > MAX_ATTACHMENT_BYTES:
+                response.close()
+                raise CybermailError(
+                    f"{api_name}: ファイルが大きすぎます（上限 {MAX_ATTACHMENT_BYTES} バイト）。"
+                )
+        except ValueError:
+            pass
+
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_ATTACHMENT_BYTES:
+                    response.close()
+                    raise CybermailError(
+                        f"{api_name}: ファイルが大きすぎます（上限 {MAX_ATTACHMENT_BYTES} バイト）。"
+                    )
+                chunks.append(chunk)
+        except requests.RequestException as exc:
+            raise CybermailError(f"{api_name}: ファイルの受信に失敗しました: {exc}") from exc
+        return b"".join(chunks)
